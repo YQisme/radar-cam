@@ -157,7 +157,7 @@ def run_yolo_detection(camera_id):
                         try:
                             if os.path.exists(fifo1_path):
                                 with open(fifo1_path, 'wb') as no_person_fifo:
-                                    message = f"person_NONO_{camera_id}\0"
+                                    message = f"person_NONO\0"
                                     no_person_fifo.write(message.encode('utf-8'))
                                     no_person_fifo.flush()
                                     print(f"Sent: {message}")
@@ -205,7 +205,7 @@ def check_yolo_timeout():
                         try:
                             if os.path.exists(fifo1_path):
                                 with open(fifo1_path, 'wb') as no_person_fifo:
-                                    message = f"person_NONO_{camera_id}\0"
+                                    message = f"person_NONO\0"
                                     no_person_fifo.write(message.encode('utf-8'))
                                     no_person_fifo.flush()
                                     print(f"Sent: {message}")
