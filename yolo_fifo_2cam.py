@@ -34,7 +34,7 @@ yolo_status = {
         "last_detection_time": 0
     }
 }
-person_detection_timeout = 10  # 10秒无人检测则自动关闭YOLO
+person_detection_timeout = 3  # 3秒无人检测则自动关闭YOLO
 
 # 创建锁，用于线程间同步
 yolo_locks = {
@@ -153,6 +153,17 @@ def run_yolo_detection(camera_id):
                     
                     if last_detection > 0 and time_since_last_detection > person_detection_timeout:
                         print(f"摄像头 {camera_id} 已超过{person_detection_timeout}秒未检测到人，自动停止YOLO识别")
+                        # 发送无人检测信号
+                        try:
+                            if os.path.exists(fifo1_path):
+                                with open(fifo1_path, 'wb') as no_person_fifo:
+                                    message = f"person_NONO_{camera_id}\0"
+                                    no_person_fifo.write(message.encode('utf-8'))
+                                    no_person_fifo.flush()
+                                    print(f"Sent: {message}")
+                        except Exception as e:
+                            print(f"发送无人检测信号时发生错误: {e}")
+                        
                         with yolo_locks[camera_id]:
                             yolo_status[camera_id]["running"] = False
                 
@@ -190,6 +201,17 @@ def check_yolo_timeout():
                     
                     if time_since_last_detection > person_detection_timeout:
                         print(f"摄像头 {camera_id} 已超过{person_detection_timeout}秒未检测到人，自动停止YOLO识别")
+                        # 发送无人检测信号
+                        try:
+                            if os.path.exists(fifo1_path):
+                                with open(fifo1_path, 'wb') as no_person_fifo:
+                                    message = f"person_NONO_{camera_id}\0"
+                                    no_person_fifo.write(message.encode('utf-8'))
+                                    no_person_fifo.flush()
+                                    print(f"Sent: {message}")
+                        except Exception as e:
+                            print(f"发送无人检测信号时发生错误: {e}")
+                            
                         yolo_status[camera_id]["running"] = False
 
 def read_from_fifo():

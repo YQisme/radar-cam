@@ -8,7 +8,7 @@
 - 使用FIFO管道进行进程间通信，便于与其他程序集成
 - 自动管理摄像头资源，确保资源正确释放
 - 支持超时自动关闭检测，节省系统资源
-- 检测到人员时自动发送通知
+- 检测到人员或无人时自动发送通知
 - 支持多种控制命令，灵活控制检测行为
 
 ## 安装依赖
@@ -63,18 +63,43 @@ echo "stop_yolo" > /home/cat/leida_test/Z_pavo2__test/send_PYTHON
 
 ### 3. 接收检测结果
 
-程序检测到人员时，会向FIFO管道发送通知：
+程序会向FIFO管道发送检测结果通知：
 
 ```bash
 # 监听检测结果
 cat /home/cat/leida_test/Z_pavo2__test/rece_PYTHON
 ```
 
-检测到人员时，会收到类似`person_cam1`或`person_cam2`的消息，分别表示摄像头1或摄像头2检测到人员。
+系统会发送以下类型的消息：
+
+- `person_cam1` - 摄像头1检测到人员
+- `person_cam2` - 摄像头2检测到人员
+- `person_NONO_cam1` - 摄像头1超时未检测到人员，自动关闭
+- `person_NONO_cam2` - 摄像头2超时未检测到人员，自动关闭
 
 ## 自动超时关闭
 
-系统设计了自动超时关闭机制：如果连续10秒没有检测到人员，YOLO检测会自动停止，直到收到新的启动命令。这有助于节省系统资源。
+系统设计了自动超时关闭机制：如果连续3秒没有检测到人员，YOLO检测会自动停止并发送`person_NONO_camX`信号，直到收到新的启动命令。这有助于节省系统资源。
+
+超时时间可以通过修改代码中的`person_detection_timeout`变量进行调整：
+
+```python
+person_detection_timeout = 3  # 3秒无人检测则自动关闭YOLO
+```
+
+## 信号通信机制
+
+系统使用FIFO管道进行信号通信，具体如下：
+
+1. **输入管道**：`/home/cat/leida_test/Z_pavo2__test/send_PYTHON`
+   - 用于接收控制命令
+
+2. **输出管道**：`/home/cat/leida_test/Z_pavo2__test/rece_PYTHON`
+   - 用于发送检测结果
+
+3. **信号格式**：
+   - 检测到人：`person_camX\0`（X为摄像头编号1或2）
+   - 无人检测：`person_NONO_camX\0`（X为摄像头编号1或2）
 
 ## 技术实现
 
@@ -90,6 +115,7 @@ cat /home/cat/leida_test/Z_pavo2__test/rece_PYTHON
 2. 确保FIFO管道目录存在且有正确的读写权限
 3. 程序需要加载YOLO模型文件"yolo11n_rknn_model"，请确保该文件存在
 4. 程序会自动创建FIFO管道，但可能需要管理员权限
+5. 无人检测超时时间默认为3秒，可根据需要调整
 
 ## 故障排除
 
@@ -97,3 +123,4 @@ cat /home/cat/leida_test/Z_pavo2__test/rece_PYTHON
 - 如果FIFO管道通信失败，请检查目录权限和管道是否存在
 - 如果YOLO模型加载失败，请确认模型文件路径是否正确
 - 如果检测性能不佳，可以调整摄像头参数（分辨率、帧率等）
+- 如果无法接收无人检测信号，请确认FIFO管道权限和程序是否正常运行
