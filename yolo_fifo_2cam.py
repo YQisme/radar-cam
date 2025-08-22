@@ -88,6 +88,31 @@ def release_video_stream(camera_id):
     except Exception as e:
         print(f"释放摄像头 {camera_id} 资源时发生错误: {e}")
 
+def is_other_camera_detecting_person(current_camera_id):
+    """检查另一个摄像头是否检测到人"""
+    other_camera_id = "cam2" if current_camera_id == "cam1" else "cam1"
+    
+    # 检查另一个摄像头是否在运行
+    with yolo_locks[other_camera_id]:
+        if not yolo_status[other_camera_id]["running"]:
+            return False  # 如果另一个摄像头没有运行，则视为没有检测到人
+        
+        # 检查另一个摄像头最后检测到人的时间是否在超时范围内
+        current_time = time.time()
+        last_detection = yolo_status[other_camera_id]["last_detection_time"]
+        if last_detection == 0:  # 如果从未检测到人
+            return False
+        
+        time_since_last_detection = current_time - last_detection
+        return time_since_last_detection <= person_detection_timeout  # 如果在超时范围内，则认为检测到人
+
+def should_send_no_person_signal(camera_id):
+    """判断是否应该发送无人检测信号"""
+    # 如果另一个摄像头检测到了人，则不发送无人检测信号
+    if is_other_camera_detecting_person(camera_id):
+        return False
+    return True
+
 def run_yolo_detection(camera_id):
     """为指定摄像头运行YOLO检测"""
     print(f"启动摄像头 {camera_id} 的YOLO识别...")
@@ -152,17 +177,23 @@ def run_yolo_detection(camera_id):
                     time_since_last_detection = current_time - last_detection
                     
                     if last_detection > 0 and time_since_last_detection > person_detection_timeout:
-                        print(f"摄像头 {camera_id} 已超过{person_detection_timeout}秒未检测到人，自动停止YOLO识别")
-                        # 发送无人检测信号
-                        try:
-                            if os.path.exists(fifo1_path):
-                                with open(fifo1_path, 'wb') as no_person_fifo:
-                                    message = f"person_NONO\0"
-                                    no_person_fifo.write(message.encode('utf-8'))
-                                    no_person_fifo.flush()
-                                    print(f"Sent: {message}")
-                        except Exception as e:
-                            print(f"发送无人检测信号时发生错误: {e}")
+                        print(f"摄像头 {camera_id} 已超过{person_detection_timeout}秒未检测到人")
+                        
+                        # 检查是否应该发送无人检测信号（只有当两个摄像头都没检测到人时）
+                        if should_send_no_person_signal(camera_id):
+                            print(f"两个摄像头都未检测到人，发送无人检测信号")
+                            # 发送无人检测信号
+                            try:
+                                if os.path.exists(fifo1_path):
+                                    with open(fifo1_path, 'wb') as no_person_fifo:
+                                        message = f"person_NONO\0"
+                                        no_person_fifo.write(message.encode('utf-8'))
+                                        no_person_fifo.flush()
+                                        print(f"Sent: {message}")
+                            except Exception as e:
+                                print(f"发送无人检测信号时发生错误: {e}")
+                        else:
+                            print(f"另一个摄像头仍在检测到人，不发送无人检测信号")
                         
                         with yolo_locks[camera_id]:
                             yolo_status[camera_id]["running"] = False
@@ -200,17 +231,23 @@ def check_yolo_timeout():
                     time_since_last_detection = current_time - last_detection
                     
                     if time_since_last_detection > person_detection_timeout:
-                        print(f"摄像头 {camera_id} 已超过{person_detection_timeout}秒未检测到人，自动停止YOLO识别")
-                        # 发送无人检测信号
-                        try:
-                            if os.path.exists(fifo1_path):
-                                with open(fifo1_path, 'wb') as no_person_fifo:
-                                    message = f"person_NONO\0"
-                                    no_person_fifo.write(message.encode('utf-8'))
-                                    no_person_fifo.flush()
-                                    print(f"Sent: {message}")
-                        except Exception as e:
-                            print(f"发送无人检测信号时发生错误: {e}")
+                        print(f"摄像头 {camera_id} 已超过{person_detection_timeout}秒未检测到人")
+                        
+                        # 检查是否应该发送无人检测信号（只有当两个摄像头都没检测到人时）
+                        if should_send_no_person_signal(camera_id):
+                            print(f"两个摄像头都未检测到人，发送无人检测信号")
+                            # 发送无人检测信号
+                            try:
+                                if os.path.exists(fifo1_path):
+                                    with open(fifo1_path, 'wb') as no_person_fifo:
+                                        message = f"person_NONO\0"
+                                        no_person_fifo.write(message.encode('utf-8'))
+                                        no_person_fifo.flush()
+                                        print(f"Sent: {message}")
+                            except Exception as e:
+                                print(f"发送无人检测信号时发生错误: {e}")
+                        else:
+                            print(f"另一个摄像头仍在检测到人，不发送无人检测信号")
                             
                         yolo_status[camera_id]["running"] = False
 
