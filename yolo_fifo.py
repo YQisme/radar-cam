@@ -10,7 +10,7 @@ fifo_path = '/home/cat/leida_test/Z_pavo2__test/send_PYTHON'
 fifo1_path = '/home/cat/leida_test/Z_pavo2__test/rece_PYTHON'
 
 # RTSP 摄像头源
-source = "rtsp://admin:scyzkj123456@192.168.0.2:554/h264/ch1/main/av_stream"
+source = "rtsp://192.168.0.100:8554/dual_stream"
 
 # 加载预训练的 YOLO 模型
 model = YOLO("yolo11n.pt")
@@ -19,7 +19,10 @@ model = YOLO("yolo11n.pt")
 yolo_running = False
 person_detected = False
 last_person_detection_time = 0
-person_detection_timeout = 10  # 10秒无人检测则自动关闭YOLO
+person_detection_timeout = 2  # 2秒无人检测则自动关闭YOLO
+
+# 自动超时停止的通知标志（由写线程消费并发送 person_NONO\0）
+send_person_nono = False
 
 # 创建锁，用于线程间同步
 yolo_lock = threading.Lock()
@@ -42,6 +45,12 @@ def init_video_stream():
         if not cap.isOpened():
             print("无法打开视频流")
             return None
+        
+        # 缩小内部缓冲，避免累积延迟
+        try:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
         
         print("成功连接到视频流")
         return cap
@@ -87,7 +96,13 @@ def run_yolo_detection():
                         if cap is None:
                             break
                     
-                    # 读取一帧
+                    # 丢弃未处理的历史帧，仅保留最新帧以保证实时性
+                    try:
+                        for _ in range(4):
+                            cap.grab()
+                    except Exception:
+                        pass
+
                     ret, frame = cap.read()
                     if not ret:
                         print("无法读取视频帧，尝试重新初始化视频流")
@@ -95,7 +110,7 @@ def run_yolo_detection():
                         continue
                 
                 # 使用YOLO模型进行目标检测
-                results = model.track(frame, stream=False)  # 单帧处理，不使用流模式
+                results = model.track(frame, stream=False, save=False)  # 单帧处理，不使用流模式，不落盘
                 
                 person_found = False
                 
@@ -108,6 +123,17 @@ def run_yolo_detection():
                             if cls_name == "person":
                                 print("检测到人！")
                                 person_found = True
+                                # 额外向 fifo1_path 发送 person_cam1\0（仅首次，非阻塞写）
+                                try:
+                                    fd = os.open(fifo1_path, os.O_WRONLY | os.O_NONBLOCK)
+                                    try:
+                                        os.write(fd, b"person_cam1\0")
+                                        print("Sent to fifo1_path: person_cam1")
+                                    finally:
+                                        os.close(fd)
+                                except Exception:
+                                    # 若无读端或其他错误，忽略以保持实时性
+                                    pass
                                 with yolo_lock:
                                     person_detected = True
                                     last_person_detection_time = time.time()
@@ -122,6 +148,9 @@ def run_yolo_detection():
                         print(f"已超过{person_detection_timeout}秒未检测到人，自动停止YOLO识别")
                         with yolo_lock:
                             yolo_running = False
+                            # 标记需要向fifo1发送 person_NONO\0
+                            global send_person_nono
+                            send_person_nono = True
                 
                 # 如果不再运行，退出循环
                 with yolo_lock:
@@ -157,6 +186,9 @@ def check_yolo_timeout():
                 if time_since_last_detection > person_detection_timeout:
                     print(f"已超过{person_detection_timeout}秒未检测到人，自动停止YOLO识别")
                     yolo_running = False
+                    # 标记需要向fifo1发送 person_NONO\0
+                    global send_person_nono
+                    send_person_nono = True
 
 def read_from_fifo():
     global yolo_running, last_person_detection_time
@@ -231,7 +263,7 @@ def read_from_fifo():
         time.sleep(1)
 
 def write_to_fifo1():
-    global person_detected
+    global person_detected, send_person_nono
     
     while True:
         try:
@@ -251,9 +283,18 @@ def write_to_fifo1():
                         # 如果检测到人，向管道发送 "person"
                         with yolo_lock:
                             local_person_detected = person_detected
+                            local_send_person_nono = send_person_nono
                             if local_person_detected:
                                 person_detected = False  # 重置检测标志
+                            if local_send_person_nono:
+                                send_person_nono = False  # 只发送一次
                         
+                        # 自动停止时立即发送 person_NONO\0
+                        if local_send_person_nono:
+                            fifo1.write(b"person_NONO\0")
+                            fifo1.flush()
+                            print("Sent: person_NONO")
+
                         if local_person_detected:
                             if not last_sent:  # 只有当状态改变时才发送
                                 fifo1.write(b"person\0")
